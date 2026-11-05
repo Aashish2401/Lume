@@ -94,9 +94,11 @@ fun HomeScreen(vm: LauncherViewModel) {
     var focusedLabel by remember { mutableStateOf("") }
     val firstFocus = remember { FocusRequester() }
     val rowState = rememberLazyListState()
+    val live = vm.liveTvTarget()
+    val accent = Accents[vm.accentIndex].color
 
     // Pressing Home (or finishing an overlay action) returns focus to the first tile.
-    LaunchedEffect(vm.homeTick, favorites.isNotEmpty()) {
+    LaunchedEffect(vm.homeTick, favorites.isNotEmpty(), live?.id) {
         rowState.scrollToItem(0)
         delay(90)
         runCatching { firstFocus.requestFocus() }
@@ -116,10 +118,21 @@ fun HomeScreen(vm: LauncherViewModel) {
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
+            if (live != null) {
+                item(key = "live-tv") {
+                    LiveTvTile(
+                        live, accent,
+                        modifier = Modifier.focusRequester(firstFocus),
+                        onFocused = { focusedLabel = "Live TV" },
+                        onLongClick = { vm.show(Overlay.Inputs) },
+                        onClick = { vm.openInput(ctx, live.id) },
+                    )
+                }
+            }
             itemsIndexed(favorites, key = { _, a -> a.pkg }) { index, app ->
                 AppCard(
                     app, 200.dp,
-                    modifier = if (index == 0) Modifier.focusRequester(firstFocus) else Modifier,
+                    modifier = if (index == 0 && live == null) Modifier.focusRequester(firstFocus) else Modifier,
                     onFocused = { focusedLabel = app.label },
                     onLongClick = { vm.show(Overlay.AppMenu(app.pkg)) },
                     onClick = { vm.openApp(ctx, app.pkg) },
@@ -128,7 +141,7 @@ fun HomeScreen(vm: LauncherViewModel) {
             item(key = "all-apps") {
                 GlyphTile(
                     Glyph.Apps, "All apps", 200.dp,
-                    modifier = if (favorites.isEmpty()) Modifier.focusRequester(firstFocus) else Modifier,
+                    modifier = if (favorites.isEmpty() && live == null) Modifier.focusRequester(firstFocus) else Modifier,
                     onFocused = { focusedLabel = "All apps" },
                     onClick = { vm.show(Overlay.Drawer) },
                 )
@@ -210,7 +223,7 @@ fun TopBar(vm: LauncherViewModel, modifier: Modifier = Modifier) {
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Pill(Glyph.Search, "Search", { vm.show(Overlay.Search) })
             Pill(Glyph.Input, "Inputs", { vm.show(Overlay.Inputs) })
-            Pill(Glyph.Net, net, { openSettings(ctx, Settings.ACTION_WIFI_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS, Settings.ACTION_SETTINGS) })
+            Pill(if (net == "Ethernet") Glyph.Ethernet else Glyph.Net, net, { openSettings(ctx, Settings.ACTION_WIFI_SETTINGS, Settings.ACTION_WIRELESS_SETTINGS, Settings.ACTION_SETTINGS) })
             Pill(Glyph.Gear, "Settings", { vm.show(Overlay.Quick) })
         }
     }
@@ -266,4 +279,30 @@ fun openSettings(ctx: Context, vararg actions: String, uri: Uri? = null): Boolea
     }
     Toast.makeText(ctx, "Not available on this TV", Toast.LENGTH_SHORT).show()
     return false
+}
+
+/** Big accent-coloured shortcut back to the set-top box (the connected HDMI input). */
+@Composable
+fun LiveTvTile(
+    input: InputItem,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onFocused: () -> Unit = {},
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit,
+) {
+    TileFrame(200.dp, modifier, onFocused, onLongClick, onClick, background = accent) {
+        Column(
+            Modifier.fillMaxSize().padding(horizontal = 20.dp),
+            verticalArrangement = Arrangement.Center,
+        ) {
+            GlyphIcon(Glyph.Tv, Color.White, 34.dp)
+            Spacer(Modifier.height(8.dp))
+            Txt("Live TV", 22.sp, weight = FontWeight.SemiBold)
+            Txt(
+                if (input.connected) input.label else input.label + " \u00B7 no signal", 13.sp,
+                color = Color.White.copy(alpha = 0.85f),
+            )
+        }
+    }
 }

@@ -147,112 +147,6 @@ fun Modifier.autoFocus(): Modifier {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Icons, drawn in code so there are no asset or dependency differences between devices.
-// ---------------------------------------------------------------------------------------------
-
-enum class Glyph { Search, Apps, Net, Input, Gear, Sound, Display, Bluetooth, Palette }
-
-@Composable
-fun GlyphIcon(glyph: Glyph, tint: Color, size: Dp, modifier: Modifier = Modifier) {
-    Canvas(modifier.size(size)) {
-        val s = this.size.minDimension
-        val sw = s * 0.09f
-        val st = Stroke(width = sw, cap = StrokeCap.Round, join = StrokeJoin.Round)
-        fun p(x: Float, y: Float) = Offset(x * s, y * s)
-
-        when (glyph) {
-            Glyph.Search -> {
-                drawCircle(tint, radius = s * 0.30f, center = p(0.42f, 0.42f), style = st)
-                drawLine(tint, p(0.64f, 0.64f), p(0.88f, 0.88f), strokeWidth = sw, cap = StrokeCap.Round)
-            }
-            Glyph.Apps -> {
-                val sq = s * 0.36f
-                for (x in listOf(0.08f, 0.56f)) for (y in listOf(0.08f, 0.56f)) {
-                    drawRoundRect(tint, topLeft = p(x, y), size = Size(sq, sq), cornerRadius = CornerRadius(sq * 0.22f))
-                }
-            }
-            Glyph.Net -> {
-                val c = p(0.5f, 0.80f)
-                for (r in listOf(0.2f, 0.4f, 0.6f)) {
-                    drawArc(
-                        tint, startAngle = 225f, sweepAngle = 90f, useCenter = false,
-                        topLeft = Offset(c.x - r * s, c.y - r * s), size = Size(2 * r * s, 2 * r * s), style = st,
-                    )
-                }
-                drawCircle(tint, radius = sw * 0.9f, center = c)
-            }
-            Glyph.Input -> {
-                drawRoundRect(
-                    tint, topLeft = p(0.44f, 0.14f), size = Size(s * 0.46f, s * 0.72f),
-                    cornerRadius = CornerRadius(s * 0.08f), style = st,
-                )
-                drawLine(tint, p(0.08f, 0.5f), p(0.64f, 0.5f), strokeWidth = sw, cap = StrokeCap.Round)
-                drawLine(tint, p(0.64f, 0.5f), p(0.46f, 0.32f), strokeWidth = sw, cap = StrokeCap.Round)
-                drawLine(tint, p(0.64f, 0.5f), p(0.46f, 0.68f), strokeWidth = sw, cap = StrokeCap.Round)
-            }
-            Glyph.Gear -> {
-                val c = p(0.5f, 0.5f)
-                drawCircle(tint, radius = s * 0.18f, center = c, style = st)
-                for (i in 0 until 8) {
-                    val a = Math.toRadians(i * 45.0)
-                    val dx = cos(a).toFloat()
-                    val dy = sin(a).toFloat()
-                    drawLine(
-                        tint,
-                        Offset(c.x + dx * s * 0.30f, c.y + dy * s * 0.30f),
-                        Offset(c.x + dx * s * 0.44f, c.y + dy * s * 0.44f),
-                        strokeWidth = sw * 1.4f, cap = StrokeCap.Round,
-                    )
-                }
-            }
-            Glyph.Sound -> {
-                val path = Path().apply {
-                    moveTo(s * 0.08f, s * 0.38f)
-                    lineTo(s * 0.26f, s * 0.38f)
-                    lineTo(s * 0.48f, s * 0.18f)
-                    lineTo(s * 0.48f, s * 0.82f)
-                    lineTo(s * 0.26f, s * 0.62f)
-                    lineTo(s * 0.08f, s * 0.62f)
-                    close()
-                }
-                drawPath(path, tint)
-                for (r in listOf(0.18f, 0.32f)) {
-                    drawArc(
-                        tint, startAngle = -45f, sweepAngle = 90f, useCenter = false,
-                        topLeft = Offset(s * 0.48f - r * s, s * 0.5f - r * s), size = Size(2 * r * s, 2 * r * s), style = st,
-                    )
-                }
-            }
-            Glyph.Display -> {
-                drawRoundRect(
-                    tint, topLeft = p(0.08f, 0.16f), size = Size(s * 0.84f, s * 0.52f),
-                    cornerRadius = CornerRadius(s * 0.07f), style = st,
-                )
-                drawLine(tint, p(0.5f, 0.68f), p(0.5f, 0.84f), strokeWidth = sw, cap = StrokeCap.Round)
-                drawLine(tint, p(0.3f, 0.84f), p(0.7f, 0.84f), strokeWidth = sw, cap = StrokeCap.Round)
-            }
-            Glyph.Bluetooth -> {
-                val path = Path().apply {
-                    moveTo(s * 0.28f, s * 0.32f)
-                    lineTo(s * 0.72f, s * 0.68f)
-                    lineTo(s * 0.50f, s * 0.86f)
-                    lineTo(s * 0.50f, s * 0.14f)
-                    lineTo(s * 0.72f, s * 0.32f)
-                    lineTo(s * 0.28f, s * 0.68f)
-                }
-                drawPath(path, tint, style = st)
-            }
-            Glyph.Palette -> {
-                drawCircle(tint, radius = s * 0.38f, center = p(0.5f, 0.5f), style = st)
-                drawCircle(tint, radius = sw * 0.8f, center = p(0.38f, 0.40f))
-                drawCircle(tint, radius = sw * 0.8f, center = p(0.58f, 0.34f))
-                drawCircle(tint, radius = sw * 0.8f, center = p(0.66f, 0.54f))
-            }
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------------------------
 // Pill button (top bar)
 // ---------------------------------------------------------------------------------------------
 
@@ -314,6 +208,7 @@ fun TileFrame(
     onFocused: () -> Unit = {},
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit,
+    background: Color = Color(0xFF17171B),
     content: @Composable BoxScope.() -> Unit,
 ) {
     var focused by remember { mutableStateOf(false) }
@@ -333,7 +228,7 @@ fun TileFrame(
                 scaleY = scale
             }
             .clip(shape)
-            .background(Color(0xFF17171B))
+            .background(background)
             .then(if (focused) Modifier.border(3.dp, Color.White, shape) else Modifier)
             .onFocusChanged {
                 focused = it.isFocused

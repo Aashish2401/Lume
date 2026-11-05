@@ -6,10 +6,14 @@ import android.media.tv.TvContract
 import android.media.tv.TvInputManager
 import android.net.Uri
 import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -75,6 +79,7 @@ fun OverlayHost(vm: LauncherViewModel, overlay: Overlay, accent: Color) {
                 Overlay.Inputs -> InputsContent(vm)
                 Overlay.Personalize -> PersonalizeContent(vm)
                 is Overlay.AppMenu -> AppMenuContent(vm, overlay.pkg)
+                is Overlay.Resume -> ResumeContent(vm, overlay.key)
             }
         }
     }
@@ -279,28 +284,11 @@ fun QuickContent(vm: LauncherViewModel) {
 // Inputs (HDMI etc.)
 // ---------------------------------------------------------------------------------------------
 
-private class InputItem(val id: String, val label: String, val connected: Boolean)
-
-private fun loadInputs(ctx: Context): List<InputItem> = try {
-    val tim = ctx.getSystemService(Context.TV_INPUT_SERVICE) as TvInputManager
-    tim.tvInputList
-        .filter { it.isPassthroughInput }
-        .map {
-            InputItem(
-                it.id,
-                (it.loadCustomLabel(ctx) ?: it.loadLabel(ctx)).toString(),
-                tim.getInputState(it.id) == TvInputManager.INPUT_STATE_CONNECTED,
-            )
-        }
-        .sortedBy { it.label }
-} catch (e: Exception) {
-    emptyList()
-}
-
 @Composable
 fun InputsContent(vm: LauncherViewModel) {
     val ctx = LocalContext.current
-    val inputs = remember { loadInputs(ctx) }
+    LaunchedEffect(Unit) { vm.refreshInputs() }
+    val inputs = vm.inputs
     Column(
         Modifier.fillMaxHeight().width(632.dp).padding(horizontal = 56.dp, vertical = 48.dp),
         verticalArrangement = Arrangement.Center,
@@ -308,10 +296,7 @@ fun InputsContent(vm: LauncherViewModel) {
         Txt("Inputs", 28.sp, weight = FontWeight.Light)
         Spacer(Modifier.height(20.dp))
         if (inputs.isEmpty()) {
-            Txt(
-                "No inputs reported by this TV.", 15.sp,
-                color = Color.White.copy(alpha = 0.6f), maxLines = 2,
-            )
+            Txt("No inputs reported by this TV.", 15.sp, color = Color.White.copy(alpha = 0.6f), maxLines = 2)
             Spacer(Modifier.height(16.dp))
             WideButton(
                 "Open system settings",
@@ -326,16 +311,7 @@ fun InputsContent(vm: LauncherViewModel) {
                 WideButton(
                     input.label,
                     {
-                        val ok = try {
-                            ctx.startActivity(
-                                Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(input.id))
-                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                            )
-                            true
-                        } catch (e: Exception) {
-                            false
-                        }
-                        if (!ok) vm.toast("This TV can't switch input from here")
+                        vm.openInput(ctx, input.id)
                         vm.goHome()
                     },
                     Modifier.padding(bottom = 10.dp).then(if (i == 0) Modifier.autoFocus() else Modifier),
@@ -347,37 +323,92 @@ fun InputsContent(vm: LauncherViewModel) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Personalize: accent colour and layout sync
+// Personalize: startup, Live TV button, accent colour and layout sync
 // ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun SectionLabel(text: String) {
+    Txt(text, 12.sp, color = Color.White.copy(alpha = 0.5f), weight = FontWeight.Medium, spacing = 2.sp)
+    Spacer(Modifier.height(10.dp))
+}
 
 @Composable
 fun PersonalizeContent(vm: LauncherViewModel) {
     Column(
-        Modifier.fillMaxHeight().width(672.dp).padding(horizontal = 56.dp, vertical = 40.dp),
-        verticalArrangement = Arrangement.Center,
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 56.dp, vertical = 36.dp),
     ) {
         Txt("Personalize", 28.sp, weight = FontWeight.Light)
         Spacer(Modifier.height(20.dp))
-        Txt("ACCENT", 12.sp, color = Color.White.copy(alpha = 0.5f), weight = FontWeight.Medium, spacing = 2.sp)
-        Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Accents.forEachIndexed { i, a ->
-                Swatch(
-                    a.color, selected = i == vm.accentIndex, onClick = { vm.setAccent(i) },
-                    modifier = if (i == vm.accentIndex) Modifier.autoFocus() else Modifier,
+        Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
+            Column(Modifier.width(400.dp)) {
+                SectionLabel("STARTUP")
+                WideButton(
+                    "When TV powers on", { vm.cycleStartup() },
+                    Modifier.autoFocus().padding(bottom = 10.dp), hint = vm.startupLabel(),
                 )
+                WideButton(
+                    "Live TV button", { vm.cycleTvInput() },
+                    Modifier.padding(bottom = 8.dp), hint = vm.tvInputLabel(),
+                )
+                Txt(
+                    "After a power-on, Lume counts down 3 seconds, then opens your choice. Press Back to cancel.",
+                    12.sp, color = Color.White.copy(alpha = 0.45f), maxLines = 3,
+                )
+                Spacer(Modifier.height(22.dp))
+                SectionLabel("ACCENT")
+                Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                    Accents.forEachIndexed { i, a ->
+                        Swatch(a.color, selected = i == vm.accentIndex, onClick = { vm.setAccent(i) })
+                    }
+                }
+            }
+            Column(Modifier.width(400.dp)) {
+                SectionLabel("LAYOUT")
+                WideButton("Export layout", { vm.toast(vm.exportLayout()) }, Modifier.padding(bottom = 10.dp))
+                WideButton("Import layout", { vm.toast(vm.importLayout()) }, Modifier.padding(bottom = 10.dp))
+                WideButton(
+                    "Unhide all apps", { vm.unhideAll(); vm.toast("All apps visible") },
+                    Modifier.padding(bottom = 10.dp), hint = "${vm.hiddenPkgs.size} hidden",
+                )
+                WideButton("Reset to defaults", { vm.resetLayout(); vm.goHome() })
             }
         }
-        Spacer(Modifier.height(24.dp))
-        Txt("LAYOUT", 12.sp, color = Color.White.copy(alpha = 0.5f), weight = FontWeight.Medium, spacing = 2.sp)
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Power-on countdown
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+fun ResumeContent(vm: LauncherViewModel, key: String) {
+    val ctx = LocalContext.current
+    val label = vm.targetLabel(key) ?: ""
+    val progress = remember { Animatable(0f) }
+    LaunchedEffect(key) {
+        progress.animateTo(1f, tween(3000, easing = LinearEasing))
+        vm.launchTarget(ctx, key)
+        vm.goHome()
+    }
+    Column(
+        Modifier.fillMaxSize(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Txt("STARTING", 13.sp, color = Color.White.copy(alpha = 0.5f), weight = FontWeight.Medium, spacing = 3.sp)
         Spacer(Modifier.height(10.dp))
-        WideButton("Export layout", { vm.toast(vm.exportLayout()) }, Modifier.padding(bottom = 10.dp))
-        WideButton("Import layout", { vm.toast(vm.importLayout()) }, Modifier.padding(bottom = 10.dp))
-        WideButton(
-            "Unhide all apps", { vm.unhideAll(); vm.toast("All apps visible") },
-            Modifier.padding(bottom = 10.dp), hint = "${vm.hiddenPkgs.size} hidden",
-        )
-        WideButton("Reset to defaults", { vm.resetLayout(); vm.goHome() })
+        Txt(label, 44.sp, weight = FontWeight.Light)
+        Spacer(Modifier.height(28.dp))
+        Box(
+            Modifier.width(360.dp).height(4.dp).clip(RoundedCornerShape(2.dp))
+                .background(Color.White.copy(alpha = 0.15f)),
+        ) {
+            Box(Modifier.fillMaxHeight().fillMaxWidth(progress.value).background(Color.White))
+        }
+        Spacer(Modifier.height(36.dp))
+        WideButton("Stay on home screen", { vm.dismiss() }, Modifier.width(360.dp).autoFocus())
+        Spacer(Modifier.height(10.dp))
+        Txt("or press Back", 12.sp, color = Color.White.copy(alpha = 0.4f))
     }
 }
 

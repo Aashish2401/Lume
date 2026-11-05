@@ -13,6 +13,9 @@ data class AppEntry(
     val isUserApp: Boolean,
 )
 
+/** An HDMI / passthrough input reported by the TV. */
+class InputItem(val id: String, val label: String, val connected: Boolean)
+
 sealed interface Overlay {
     data object None : Overlay
     data object Drawer : Overlay
@@ -21,6 +24,9 @@ sealed interface Overlay {
     data object Inputs : Overlay
     data object Personalize : Overlay
     data class AppMenu(val pkg: String) : Overlay
+
+    /** Power-on countdown. key is "app:<package>" or "input:<inputId>". */
+    data class Resume(val key: String) : Overlay
 }
 
 data class Accent(val name: String, val color: Color)
@@ -33,6 +39,9 @@ val Accents = listOf(
     Accent("Amber", Color(0xFFEF6C00)),
     Accent("Slate", Color(0xFF607D8B)),
 )
+
+/** Startup behaviours, in the order the Personalize button cycles through them. */
+val StartupModes = listOf("home", "resume", "live")
 
 /** Pinned on first run if installed. Matched by package name, so it works on any TV brand. */
 val DEFAULT_PINS = listOf(
@@ -51,3 +60,6 @@ val DEFAULT_PINS = listOf(
     "org.xbmc.kodi",
     "org.videolan.vlc",
 )
+
+/** Also pinned on first run, so apps like Airtel Xstream appear even though their package names vary. */
+val PIN_PATTERN = Regex("airtel|xstream|hotstar|jellyfin|netflix|prime video", RegexOption.IGNORE_CASE)

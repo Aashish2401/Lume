@@ -20,13 +20,24 @@ looks identical on every TV, and designed around a basic remote.
 
    Output: `app\build\outputs\apk\release\app-release.apk`
 
-## Install on a TV
+## Install on a TV (debloat + set as Home)
+
+On the TV: Settings > Device Preferences > About > tap Build 7 times, then Developer options > turn on
+USB/Network debugging, and note the IP address. Then on the PC (build the release APK first):
 
 ```powershell
-.\install.ps1 -Tv 192.168.1.19:5555
+.\install.cmd -Tv 192.168.1.40:5555 -DryRun     # shows the plan, changes nothing
+.\install.cmd -Tv 192.168.1.40:5555             # applies it after you type YES
 ```
 
-This installs the APK, grants the optional usage-access permission (for the Recent row), and sets Lume as Home.
+What it does: keeps Jellyfin, Netflix, Hotstar, Prime Video and Airtel Xstream; protects required system
+packages (found by asking the TV what it depends on); removes every other launchable or user-installed app
+for the user (reversible); erases leftover data and the public media folders; installs Lume, makes it Home,
+disables the other launchers, verifies, and writes an undo file.
+
+Options: `-Yes` (no prompt), `-KeepMedia`, `-ClearKeptApps`, `-AlsoKeep 'regex'` (e.g. YouTube:
+`'com\.google\.android\.youtube\.tv'`), `-Layout .\lume-layout.json`, `-NoSpeedTweaks`,
+`-Restore .\lume-undo-<tv>-<time>.txt`.
 
 ## Remote controls
 

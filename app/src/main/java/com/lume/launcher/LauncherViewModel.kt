@@ -5,6 +5,10 @@ import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
+import android.media.tv.TvContract
+import android.media.tv.TvInputManager
+import android.os.SystemClock
+import android.provider.Settings
 import android.widget.Toast
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -18,11 +22,29 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 
+/** Reads the TV's passthrough inputs (HDMI etc.). Returns an empty list if the TV doesn't expose them. */
+fun loadInputs(ctx: Context): List<InputItem> = try {
+    val tim = ctx.getSystemService(Context.TV_INPUT_SERVICE) as TvInputManager
+    tim.tvInputList
+        .filter { it.isPassthroughInput }
+        .map {
+            InputItem(
+                it.id,
+                (it.loadCustomLabel(ctx) ?: it.loadLabel(ctx)).toString(),
+                tim.getInputState(it.id) == TvInputManager.INPUT_STATE_CONNECTED,
+            )
+        }
+        .sortedBy { it.label }
+} catch (e: Exception) {
+    emptyList()
+}
+
 class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     private val store = LayoutStore(app)
     private val repo = AppRepository(app)
     private var loadJob: Job? = null
+    private var startupChecked = false
 
     var apps by mutableStateOf<List<AppEntry>>(emptyList())
         private set
@@ -36,11 +58,18 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var homeTick by mutableIntStateOf(0)
         private set
+    var inputs by mutableStateOf<List<InputItem>>(emptyList())
+        private set
+    var startupMode by mutableStateOf(store.startup)
+        private set
+    var tvInputId by mutableStateOf(store.tvInputId)
+        private set
 
     val overlays = mutableStateListOf<Overlay>()
 
     init {
         app.getExternalFilesDir(null) // creates the folder used for layout import/export
+        refreshInputs()
         reload()
     }
 
@@ -70,6 +99,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             if (loaded.isNotEmpty()) applyDefaults(loaded)
             apps = loaded
             refreshRecents()
+            refreshInputs()
+            if (!startupChecked && loaded.isNotEmpty()) {
+                startupChecked = true
+                // Separate coroutine so a later reload() can't cancel a pending power-on resume.
+                viewModelScope.launch { runStartupCheck() }
+            }
         }
     }
 
@@ -77,7 +112,12 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         val installed = loaded.map { it.pkg }.toSet()
         val userApps = loaded.filter { it.isUserApp }.map { it.pkg }
         val current = store.favorites
-        val base = current ?: DEFAULT_PINS.filter { it in installed }
+        val extra = if (current == null) {
+            loaded.filter { PIN_PATTERN.containsMatchIn(it.pkg + " " + it.label) }.map { it.pkg }
+        } else {
+            emptyList()
+        }
+        val base = current ?: (DEFAULT_PINS.filter { it in installed } + extra).distinct()
         val hidden = store.hidden
         val known = store.known
         val fresh = userApps.filter { it !in known && it !in base && it !in hidden }
@@ -90,13 +130,18 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
 
     fun visibleApps(): List<AppEntry> = apps.filter { it.pkg !in hiddenPkgs }
 
+    fun refreshInputs() {
+        inputs = loadInputs(getApplication())
+    }
+
     // ---- recents --------------------------------------------------------------------------
 
+    /** Packages ordered by most recent foreground time. Needs the optional usage-access grant. */
     @Suppress("DEPRECATION")
     private fun usageRecents(): List<String> = try {
         val usm = getApplication<Application>().getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val end = System.currentTimeMillis()
-        val events = usm.queryEvents(end - 3L * 24 * 3600 * 1000, end)
+        val events = usm.queryEvents(end - 7L * 24 * 3600 * 1000, end)
         val last = HashMap<String, Long>()
         val e = UsageEvents.Event()
         while (events != null && events.hasNextEvent()) {
@@ -116,7 +161,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
             .take(12)
     }
 
-    // ---- actions --------------------------------------------------------------------------
+    // ---- opening things -------------------------------------------------------------------
 
     fun openApp(ctx: Context, pkg: String) {
         val pm = ctx.packageManager
@@ -129,10 +174,147 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         try {
             ctx.startActivity(intent)
             store.recordLaunch(pkg)
+            store.lastTarget = "app:$pkg"
         } catch (e: Exception) {
             Toast.makeText(ctx, "Can't open this app", Toast.LENGTH_SHORT).show()
         }
     }
+
+    fun openInput(ctx: Context, id: String): Boolean {
+        val ok = try {
+            ctx.startActivity(
+                Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput(id))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+            true
+        } catch (e: Exception) {
+            false
+        }
+        if (ok) {
+            store.lastInputId = id
+            store.lastTarget = "input:$id"
+        } else {
+            toast("This TV can't switch input from here")
+        }
+        return ok
+    }
+
+    fun launchTarget(ctx: Context, key: String) {
+        when {
+            key.startsWith("app:") -> openApp(ctx, key.removePrefix("app:"))
+            key.startsWith("input:") -> openInput(ctx, key.removePrefix("input:"))
+        }
+    }
+
+    /** Human-readable name for a target key, or null if it is no longer available on this TV. */
+    fun targetLabel(key: String): String? = when {
+        key.startsWith("app:") -> apps.firstOrNull { it.pkg == key.removePrefix("app:") }?.label
+        key.startsWith("input:") -> inputs.firstOrNull { it.id == key.removePrefix("input:") }?.label
+        else -> null
+    }
+
+    // ---- Live TV tile ---------------------------------------------------------------------
+
+    /**
+     * Which input the Live TV tile opens: the pinned one, else the last-used connected input,
+     * else any connected input, else the last-used or first input.
+     */
+    fun liveTvTarget(): InputItem? {
+        val list = inputs
+        if (list.isEmpty()) return null
+        tvInputId?.let { id -> list.firstOrNull { it.id == id }?.let { return it } }
+        val last = store.lastInputId
+        return list.firstOrNull { it.id == last && it.connected }
+            ?: list.firstOrNull { it.connected }
+            ?: list.firstOrNull { it.id == last }
+            ?: list.first()
+    }
+
+    fun tvInputLabel(): String =
+        if (tvInputId == null) "Auto" else inputs.firstOrNull { it.id == tvInputId }?.label ?: "Not found"
+
+    fun cycleTvInput() {
+        val options = listOf<String?>(null) + inputs.map { it.id }
+        val next = options[(options.indexOf(tvInputId).coerceAtLeast(0) + 1) % options.size]
+        store.tvInputId = next
+        tvInputId = next
+    }
+
+    // ---- startup behaviour (survives power cycles) ------------------------------------------
+
+    fun startupLabel(): String = when (startupMode) {
+        "resume" -> "Last app or input"
+        "live" -> "Live TV input"
+        else -> "Home screen"
+    }
+
+    fun cycleStartup() {
+        val next = StartupModes[(StartupModes.indexOf(startupMode).coerceAtLeast(0) + 1) % StartupModes.size]
+        store.startup = next
+        startupMode = next
+    }
+
+    /** Changes on every power-on, stays the same across standby, wake and Lume restarts. */
+    private fun bootId(): Long {
+        val count = try {
+            Settings.Global.getInt(getApplication<Application>().contentResolver, Settings.Global.BOOT_COUNT)
+        } catch (e: Exception) {
+            -1
+        }
+        return if (count >= 0) count.toLong() else (System.currentTimeMillis() - SystemClock.elapsedRealtime()) / 120_000L
+    }
+
+    @Suppress("DEPRECATION")
+    private fun queryPackages(intent: Intent): Set<String> = try {
+        getApplication<Application>().packageManager.queryIntentActivities(intent, 0)
+            .mapNotNull { it.activityInfo?.packageName }.toSet()
+    } catch (e: Exception) {
+        emptySet()
+    }
+
+    /** Packages that display HDMI inputs (the "Live TV" app of this particular TV). */
+    private fun tvViewerPackages(): Set<String> =
+        queryPackages(Intent(Intent.ACTION_VIEW, TvContract.buildChannelUriForPassthroughInput("lume")))
+
+    private fun homePackages(): Set<String> =
+        queryPackages(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+
+    /** What the TV was showing before it was switched off. */
+    private fun resumeTarget(): String? {
+        val installed = apps.map { it.pkg }.toSet()
+        val viewers = tvViewerPackages()
+        val skip = homePackages() + setOf(getApplication<Application>().packageName, "android", "com.android.systemui")
+        val last = usageRecents().firstOrNull { it !in skip && (it in installed || it in viewers) }
+        val key = when {
+            last == null -> store.lastTarget
+            last in viewers -> (store.lastInputId ?: liveTvTarget()?.id)?.let { "input:$it" } ?: store.lastTarget
+            else -> "app:$last"
+        }
+        return key?.takeIf { targetLabel(it) != null }
+    }
+
+    private suspend fun runStartupCheck() {
+        val id = bootId()
+        if (id == store.lastBootId) return // same power-on as last time: user just pressed Home
+        store.lastBootId = id
+        if (store.startup == "home") return
+
+        // Inputs can take a few seconds to appear right after power-on.
+        var tries = 0
+        while (inputs.isEmpty() && tries < 4) {
+            delay(1500)
+            refreshInputs()
+            tries++
+        }
+        val key = when (store.startup) {
+            "resume" -> resumeTarget()
+            "live" -> liveTvTarget()?.let { "input:${it.id}" }
+            else -> null
+        } ?: return
+        if (targetLabel(key) != null) show(Overlay.Resume(key))
+    }
+
+    // ---- pinning, hiding ------------------------------------------------------------------
 
     fun isPinned(pkg: String) = pkg in favoritePkgs
 
@@ -199,6 +381,7 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         favoritePkgs = store.favorites ?: emptyList()
         hiddenPkgs = store.hidden
         accentIndex = store.accent.coerceIn(0, Accents.lastIndex)
+        startupMode = store.startup
         refreshRecents()
         return "Layout imported"
     }
@@ -208,6 +391,8 @@ class LauncherViewModel(app: Application) : AndroidViewModel(app) {
         favoritePkgs = emptyList()
         hiddenPkgs = emptySet()
         accentIndex = 0
+        startupMode = "home"
+        tvInputId = null
         reload()
     }
 
